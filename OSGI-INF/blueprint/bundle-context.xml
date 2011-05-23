@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<blueprint xmlns="http://www.osgi.org/xmlns/blueprint/v1.0.0"
+	xmlns:bp="http://www.osgi.org/xmlns/blueprint/v1.0.0" xmlns:cm="http://aries.apache.org/blueprint/xmlns/blueprint-cm/v1.1.0"
+	xmlns:ext="http://aries.apache.org/blueprint/xmlns/blueprint-ext/v1.0.0">
+
+	<bean id="dyndnsUpdateService" class="idv.kaomk.eicrhios.dyndns.DyndnsUpdateService"
+		init-method="start" destroy-method="stop">
+		<property name="period" value="${period}" />
+		<property name="timeUnit" value="${timeUnit}" />
+		<property name="username" value="${username}" />
+		<property name="password" value="${password}" />
+		<property name="hostname" value="${hostname}" />
+	</bean>
+
+	<cm:property-placeholder persistent-id="idv.kaomk.eicrhios.dyndns"
+		update-strategy="reload">
+		<cm:default-properties>
+			<cm:property name="period" value="10" />
+			<cm:property name="timeUnit" value="MINUTES" />
+			<cm:property name="username" value="" />
+			<cm:property name="password" value="" />
+			<cm:property name="hostname" value="" />
+		</cm:default-properties>
+	</cm:property-placeholder>
+
+	<command-bundle xmlns="http://karaf.apache.org/xmlns/shell/v1.0.0">
+		<command name="dyndns/refresh">
+			<action class="idv.kaomk.eicrhios.dyndns.RefreshAction">
+				<property name="dyndnsUpdateService" ref="dyndnsUpdateService" />
+			</action>
+		</command>
+	</command-bundle>
+</blueprint>
