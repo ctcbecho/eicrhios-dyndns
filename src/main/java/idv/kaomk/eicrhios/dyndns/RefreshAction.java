@@ -9,7 +9,7 @@ public class RefreshAction extends OsgiCommandSupport {
 
 	@Override
 	protected Object doExecute() throws Exception {
-		return String.format("status: %s", mDyndnsUpdateService.refresh());
+		return mDyndnsUpdateService.refresh();
 	}
 
 	public DyndnsUpdateService getDyndnsUpdateService() {
