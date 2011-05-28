@@ -16,7 +16,16 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import sun.misc.BASE64Encoder;
+
+@SuppressWarnings("restriction")
 public class DyndnsUpdateService implements Callable<String>, Runnable {
+	private static final URL QUERY_IP_URL;
+
+	private static enum STATUS {
+		good, nochg, badauth
+	}
+
 	private Logger logger = LoggerFactory.getLogger(DyndnsUpdateService.class);
 
 	private long mPeriod;
@@ -31,9 +40,19 @@ public class DyndnsUpdateService implements Callable<String>, Runnable {
 
 	private String mHostname;
 
-	private String mStatus;
+	private STATUS mStatus;
+
+	private String mCurrentIp;
 
 	private ScheduledFuture<?> mUpdateDnsFuture;
+
+	static {
+		try {
+			QUERY_IP_URL = new URL("http://queryip.net/ip");
+		} catch (MalformedURLException e) {
+			throw new RuntimeException(e);
+		}
+	}
 
 	@Override
 	public void run() {
@@ -50,49 +69,35 @@ public class DyndnsUpdateService implements Callable<String>, Runnable {
 
 	@Override
 	public String call() throws IOException {
-		BufferedReader reader = null;
+		boolean shouldUpdate = false;
+		String nowIp = null;
+
 		try {
-			logger.debug(String.format("try to connect to mDnsUpdateUrl: %s",
-					mDnsUpdateUrl.toString()));
-
-			HttpURLConnection conn = (HttpURLConnection) mDnsUpdateUrl
-					.openConnection();
-
-			conn.setDoOutput(true);
-			conn.setDoInput(true);
-			conn.setUseCaches(false);
-			conn.setRequestMethod("GET");
-			conn.setRequestProperty("Content-Type", "text/html;charset=UTF-8");
-
-			conn.connect();
-
-			int responseCode = conn.getResponseCode();
-			logger.debug(String.format("mDnsUpdateUrl response code: %d",
-					responseCode));
-			reader = new BufferedReader(new InputStreamReader(
-					responseCode == HttpURLConnection.HTTP_OK ? conn
-							.getInputStream() : conn.getErrorStream()));
-
-			if (responseCode == HttpURLConnection.HTTP_OK) {
-				mStatus = reader.readLine();
-				logger.debug(String.format("mStatus: %s", mStatus));
-				return mStatus;
+			nowIp = requestWebSite(QUERY_IP_URL, false);
+			if (mCurrentIp == null || !mCurrentIp.equals(nowIp)) {
+				logger.info(String.format(
+						"mCurrentIp(%s) != nowIp(%s), need update...",
+						mCurrentIp, nowIp));
+				shouldUpdate = true;
 			} else {
-				String line;
-				StringBuilder sb = new StringBuilder();
-				while ((line = reader.readLine()) != null) {
-					sb.append(line);
-				}
-				throw new IOException(sb.toString());
+				logger.debug("IP is not changed.");
 			}
-		} finally {
-			if (reader != null)
-				try {
-					reader.close();
-				} catch (IOException e) {
-				}
+		} catch (IOException e) {
+			logger.warn("query current ip failed: ", e);
+			shouldUpdate = true;
 		}
 
+		if (shouldUpdate) {
+			String response = requestWebSite(mDnsUpdateUrl, true);
+			mStatus = STATUS.valueOf(response.split(
+					" ")[0]);
+			logger.debug(String.format("mStatus: %s", mStatus));
+			if (mStatus == STATUS.good || mStatus == STATUS.nochg) {
+				mCurrentIp = nowIp;
+			}
+			return response;
+		} else
+			return String.format("%s %s", mStatus, mCurrentIp);
 	}
 
 	private ScheduledExecutorService mExecutor = Executors
@@ -100,16 +105,16 @@ public class DyndnsUpdateService implements Callable<String>, Runnable {
 
 	public void start() throws MalformedURLException {
 		if (logger.isDebugEnabled()) {
-			logger.debug("DyndnsUpdateService.start");
-			logger.debug(String.format(
-					"scheduleAtFixedRate param: period=%1$s, timeUnit=%2$s",
-					mPeriod, mTimeUnit.toString()));
+			logger.info("DyndnsUpdateService.start");
+			logger.info(String.format(
+					"scheduleAtFixedRate param: %s", this));
 
 		}
 
-		mDnsUpdateUrl = new URL(String.format(
-				"http://%1$s:%2$s@members.dyndns.org/nic/update?hostname=%3$s",
-				mUsername, mPassword, mHostname));
+		mDnsUpdateUrl = new URL(
+				String.format(
+						"http://members.dyndns.org/nic/update?hostname=%1$s",
+						mHostname));
 
 		mUpdateDnsFuture = mExecutor.scheduleAtFixedRate(this, 0, mPeriod,
 				mTimeUnit);
@@ -171,8 +176,63 @@ public class DyndnsUpdateService implements Callable<String>, Runnable {
 		return mDnsUpdateUrl;
 	}
 
-	public String getStatus() {
+	public STATUS getStatus() {
 		return mStatus;
 	}
 
+	private String requestWebSite(URL url, boolean needAuth) throws IOException {
+		BufferedReader reader = null;
+		try {
+			logger.debug(String.format("try to connect to Url: %s",
+					url.toString()));
+
+			HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+
+			conn.setDoOutput(true);
+			conn.setDoInput(true);
+			conn.setUseCaches(false);
+			conn.setRequestMethod("GET");
+			conn.setRequestProperty("Content-Type", "text/html;charset=UTF-8");
+			if (needAuth) {
+				BASE64Encoder enc = new sun.misc.BASE64Encoder();
+				String userpassword = mUsername + ":" + mPassword;
+				conn.setRequestProperty("Authorization",
+						"Basic " + enc.encode(userpassword.getBytes()));
+
+			}
+			conn.connect();
+
+			int responseCode = conn.getResponseCode();
+			logger.debug(String.format("response code: %d", responseCode));
+			reader = new BufferedReader(new InputStreamReader(
+					responseCode == HttpURLConnection.HTTP_OK ? conn
+							.getInputStream() : conn.getErrorStream()));
+
+			if (responseCode == HttpURLConnection.HTTP_OK) {
+				return reader.readLine();
+			} else {
+				String line;
+				StringBuilder sb = new StringBuilder();
+				while ((line = reader.readLine()) != null) {
+					sb.append(line);
+				}
+				throw new IOException(sb.toString());
+			}
+		} finally {
+			if (reader != null)
+				try {
+					reader.close();
+				} catch (IOException e) {
+				}
+		}
+	}
+
+	@Override
+	public String toString() {
+		return "DyndnsUpdateService [mPeriod=" + mPeriod + ", mTimeUnit="
+				+ mTimeUnit + ", mUsername=" + mUsername + ", mPassword="
+				+ mPassword + ", mHostname=" + mHostname + "]";
+	}
+	
+	
 }
