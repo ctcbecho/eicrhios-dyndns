@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.concurrent.Callable;
@@ -23,7 +24,7 @@ public class DyndnsUpdateService implements Callable<String>, Runnable {
 	private static final URL QUERY_IP_URL;
 
 	private static enum STATUS {
-		good, nochg, badauth
+		good, nochg, badauth, abuse
 	}
 
 	private Logger logger = LoggerFactory.getLogger(DyndnsUpdateService.class);
@@ -41,8 +42,6 @@ public class DyndnsUpdateService implements Callable<String>, Runnable {
 	private String mHostname;
 
 	private STATUS mStatus;
-
-	private String mCurrentIp;
 
 	private ScheduledFuture<?> mUpdateDnsFuture;
 
@@ -71,16 +70,17 @@ public class DyndnsUpdateService implements Callable<String>, Runnable {
 	public String call() throws IOException {
 		boolean shouldUpdate = false;
 		String nowIp = null;
-
+		String dnsIp = null;
 		try {
 			nowIp = requestWebSite(QUERY_IP_URL, false);
-			if (mCurrentIp == null || !mCurrentIp.equals(nowIp)) {
+			dnsIp = InetAddress.getByName(mHostname).getHostAddress();
+			if (!dnsIp.equals(nowIp)) {
 				logger.info(String.format(
-						"mCurrentIp(%s) != nowIp(%s), need update...",
-						mCurrentIp, nowIp));
+						"dnsIp(%s) != nowIp(%s), need update...",
+						dnsIp, nowIp));
 				shouldUpdate = true;
 			} else {
-				logger.debug("IP is not changed.");
+				logger.debug("IP %s is not changed.", nowIp);
 			}
 		} catch (IOException e) {
 			logger.warn("query current ip failed: ", e);
@@ -89,15 +89,16 @@ public class DyndnsUpdateService implements Callable<String>, Runnable {
 
 		if (shouldUpdate) {
 			String response = requestWebSite(mDnsUpdateUrl, true);
+			logger.info(String.format("dns update result: %s ", response));
 			mStatus = STATUS.valueOf(response.split(
 					" ")[0]);
 			logger.debug(String.format("mStatus: %s", mStatus));
 			if (mStatus == STATUS.good || mStatus == STATUS.nochg) {
-				mCurrentIp = nowIp;
+				dnsIp = nowIp;
 			}
 			return response;
 		} else
-			return String.format("%s %s", mStatus, mCurrentIp);
+			return String.format("%s %s", mStatus, dnsIp);
 	}
 
 	private ScheduledExecutorService mExecutor = Executors
